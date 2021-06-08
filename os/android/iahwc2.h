@@ -181,6 +181,7 @@ class IAHWC2 : public hwc2_device_t {
       numCap_ = num;
     }
 
+    bool primary_display_ = false;
     uint32_t num_intents_ = 1;  // at least support the COLORIMETRIC
     uint32_t GetNumRenderIntents() {
       return num_intents_;
@@ -235,11 +236,21 @@ class IAHWC2 : public hwc2_device_t {
                                  int32_t *fences);
     HWC2::Error PresentDisplay(int32_t *retire_fence);
     HWC2::Error SetActiveConfig(hwc2_config_t config);
+
+    /* Composer 2.4 additions */
     HWC2::Error SetActiveConfigWithConstraints(
         hwc2_config_t config,
         hwc_vsync_period_change_constraints_t *vsyncPeriodChangeConstraints,
         hwc_vsync_period_change_timeline_t *outTimeline);
     HWC2::Error GetDisplayVsyncPeriod(hwc2_vsync_period_t *outVsyncPeriod);
+
+    /* Composer 2.4 optional */
+    HWC2::Error GetDisplayConnectionType(uint32_t *connection_types);
+    HWC2::Error SetAutoLowLatencyMode(bool on);
+    HWC2::Error GetSupportedContentTypes(uint32_t *type_num,
+                                         uint32_t *content_types);
+    HWC2::Error SetContentType(int32_t content_type);
+
     HWC2::Error SetClientTarget(buffer_handle_t target, int32_t acquire_fence,
                                 int32_t dataspace, hwc_region_t damage);
     HWC2::Error SetColorMode(int32_t mode);
@@ -294,6 +305,17 @@ class IAHWC2 : public hwc2_device_t {
     return HWC2::Error::BadDisplay;
   }
 
+  bool IsValidDisplay(HwcDisplay *display) {
+    if (!display) {
+      return false;
+    }
+    hwcomposer::NativeDisplay *native_display = display->GetDisplay();
+    if (!(native_display && native_display->IsConnected())) {
+      return false;
+    }
+    return true;
+  }
+
   static IAHWC2 *toIAHWC2(hwc2_device_t *dev) {
     return static_cast<IAHWC2 *>(dev);
   }
@@ -321,6 +343,7 @@ class IAHWC2 : public hwc2_device_t {
 
     if (display_handle == HWC_DISPLAY_PRIMARY) {
       HwcDisplay &display = hwc->primary_display_;
+      display.primary_display_ = true;
       return static_cast<int32_t>((display.*func)(std::forward<Args>(args)...));
     }
 
@@ -336,12 +359,19 @@ class IAHWC2 : public hwc2_device_t {
 
     if (display_handle == HWC_DISPLAY_EXTERNAL) {
       HwcDisplay *display = hwc->extended_displays_.at(0).get();
-      return static_cast<int32_t>(
-          (display->*func)(std::forward<Args>(args)...));
+      if (!hwc->IsValidDisplay(display))
+        return static_cast<int32_t>(hwc->BadDisplay());
+      else
+        return static_cast<int32_t>(
+            (display->*func)(std::forward<Args>(args)...));
     }
 
     HwcDisplay *display = hwc->extended_displays_.at(1).get();
-    return static_cast<int32_t>((display->*func)(std::forward<Args>(args)...));
+    if (!hwc->IsValidDisplay(display))
+      return static_cast<int32_t>(hwc->BadDisplay());
+    else
+      return static_cast<int32_t>(
+          (display->*func)(std::forward<Args>(args)...));
   }
 
   template <typename HookType, HookType func, typename... Args>
@@ -351,6 +381,7 @@ class IAHWC2 : public hwc2_device_t {
 
     if (display_handle == HWC_DISPLAY_PRIMARY) {
       HwcDisplay &display = hwc->primary_display_;
+      display.primary_display_ = true;
       Hwc2Layer &layer = display.get_layer(layer_handle);
       return static_cast<int32_t>((layer.*func)(std::forward<Args>(args)...));
     }
@@ -366,13 +397,21 @@ class IAHWC2 : public hwc2_device_t {
 
     if (display_handle == HWC_DISPLAY_EXTERNAL) {
       HwcDisplay *display = hwc->extended_displays_.at(0).get();
-      Hwc2Layer &layer = display->get_layer(layer_handle);
-      return static_cast<int32_t>((layer.*func)(std::forward<Args>(args)...));
+      if (!hwc->IsValidDisplay(display)) {
+        return static_cast<int32_t>(hwc->BadDisplay());
+      } else {
+        Hwc2Layer &layer = display->get_layer(layer_handle);
+        return static_cast<int32_t>((layer.*func)(std::forward<Args>(args)...));
+      }
     }
 
     HwcDisplay *display = hwc->extended_displays_.at(1).get();
-    Hwc2Layer &layer = display->get_layer(layer_handle);
-    return static_cast<int32_t>((layer.*func)(std::forward<Args>(args)...));
+    if (!hwc->IsValidDisplay(display)) {
+      return static_cast<int32_t>(hwc->BadDisplay());
+    } else {
+      Hwc2Layer &layer = display->get_layer(layer_handle);
+      return static_cast<int32_t>((layer.*func)(std::forward<Args>(args)...));
+    }
   }
 
   // hwc2_device_t hooks
